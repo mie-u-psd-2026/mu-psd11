@@ -3,77 +3,250 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sample Application</title>
-    <!-- Vue.jsをCDNから読み込み -->
+    <title>文章推敲アプリ</title>
+
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <!-- BootStrapをCDNから読み込み -->
-	<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css">
+
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css">
 </head>
+
 <body>
 
-    <div id="app" class="container">
-        <h2 class="mb-4">サンプルアプリ</h2>
+<div id="app" class="container py-4">
 
-        <div class="mb-3">
-            <label for="inputText" class="form-label">テキストを入力してください:</label>
-            <textarea id="inputText" class="form-control" rows="5" v-model="inputText" placeholder="ここにテキストを入力..."></textarea>
-        </div>
+    <h2 class="mb-4">AI文章推敲アプリ</h2>
 
-        <div class="mb-3">
-            <button @click="execute" class="btn btn-primary">実行</button>
-            <button @click="execute_kansai" class="btn btn-success ms-2">関西弁で実行</button>
-        </div>
-        
-        <h3>結果:</h3>
-        <div class="result-area p-3 border rounded" :class="{ 'alert alert-info': resultText && !resultText.startsWith('エラー:'), 'alert alert-danger': resultText.startsWith('エラー:') }">
-            <pre style="white-space: pre-wrap;">{{ resultText }}</pre>
-        </div>
+    <!-- 用途 -->
+    <div class="mb-3">
+        <label class="form-label">文章の用途</label>
+
+        <select class="form-select" v-model="purpose">
+            <option value="report">大学レポート</option>
+            <option value="email">メール</option>
+            <option value="es">就活・ES</option>
+            <option value="normal">一般文章</option>
+        </select>
     </div>
 
-    <script>
-        const { createApp } = Vue;
+    <!-- 推敲レベル -->
+    <div class="mb-3">
+        <label class="form-label">推敲レベル</label>
 
-        createApp({
-            data() {
-                return {
-                    inputText: '',
-                    resultText: 'ここに結果が表示されます。'
-                };
-            },
-            methods: {
-                async sendRequest(context = null) {
-                    this.resultText = '処理中...';
-                    try {
-                        const payload = { text: this.inputText };
-                        if (context) {
-                            payload.context = context;
-                        }
+        <select class="form-select" v-model="level">
+            <option value="light">軽く修正</option>
+            <option value="normal">自然に修正</option>
+            <option value="strong">しっかり修正</option>
+        </select>
+    </div>
 
-                        const response = await fetch('/send_api', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(payload)
-                        });
-                        const data = await response.json();
-                        if (response.ok) {
-                            this.resultText = data.processed_text;
-                        } else {
-                            this.resultText = `エラー: ${data.error || '不明なエラーが発生しました。'}`;
-                        }
-                    } catch (error) {
-                        this.resultText = `エラー: ${error.message}`;
-                    }
-                },
-                execute() {
-                    this.sendRequest();
-                },
-                execute_kansai() {
-                    this.sendRequest("あなたは親切な関西人です。ユーザーからの入力に対して、必ず関西弁で、親しみやすく、そして140字以内で回答してください。");
-                }
+    <!-- 入力 -->
+    <div class="mb-3">
+
+        <label for="inputText" class="form-label">
+            推敲したい文章
+        </label>
+
+        <textarea
+            id="inputText"
+            class="form-control"
+            rows="8"
+            v-model="inputText"
+            placeholder="ここに文章を入力してください..."
+        ></textarea>
+
+        <div class="form-text">
+            {{ inputText.length }}文字
+        </div>
+
+    </div>
+
+    <!-- ボタン -->
+    <div class="mb-4">
+
+        <button
+            @click="execute"
+            class="btn btn-primary"
+            :disabled="isLoading"
+        >
+
+            {{ isLoading ? '推敲中...' : 'AIで推敲する' }}
+
+        </button>
+
+        <button
+            @click="clearText"
+            class="btn btn-secondary ms-2"
+        >
+            クリア
+        </button>
+
+    </div>
+
+
+    <!-- エラー -->
+    <div
+        v-if="errorMessage"
+        class="alert alert-danger"
+    >
+        {{ errorMessage }}
+    </div>
+
+
+    <!-- 結果 -->
+    <div v-if="resultText">
+
+        <h3>推敲結果</h3>
+
+        <div class="card">
+
+            <div class="card-body">
+
+                <pre style="white-space: pre-wrap;">{{ resultText }}</pre>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+
+const { createApp } = Vue;
+
+createApp({
+
+    data() {
+
+        return {
+
+            inputText: '',
+
+            resultText: '',
+
+            purpose: 'report',
+
+            level: 'normal',
+
+            isLoading: false,
+
+            errorMessage: ''
+
+        };
+
+    },
+
+
+    methods: {
+
+        async execute() {
+
+            if (!this.inputText.trim()) {
+
+                this.errorMessage =
+                    '文章を入力してください。';
+
+                return;
+
             }
-        }).mount('#app');
-    </script>
+
+
+            this.errorMessage = '';
+
+            this.resultText = '';
+
+            this.isLoading = true;
+
+
+            try {
+
+                const payload = {
+
+                    text: this.inputText,
+
+                    purpose: this.purpose,
+
+                    level: this.level
+
+                };
+
+
+                const response = await fetch(
+                    '/send_api',
+                    {
+
+                        method: 'POST',
+
+                        headers: {
+
+                            'Content-Type':
+                                'application/json'
+
+                        },
+
+                        body:
+                            JSON.stringify(payload)
+
+                    }
+                );
+
+
+                const data =
+                    await response.json();
+
+
+                if (response.ok) {
+
+                    this.resultText =
+                        data.processed_text;
+
+                }
+
+                else {
+
+                    this.errorMessage =
+                        data.error ||
+                        'エラーが発生しました。';
+
+                }
+
+            }
+
+            catch (error) {
+
+                this.errorMessage =
+                    '通信エラー: '
+                    + error.message;
+
+            }
+
+            finally {
+
+                this.isLoading = false;
+
+            }
+
+        },
+
+
+        clearText() {
+
+            this.inputText = '';
+
+            this.resultText = '';
+
+            this.errorMessage = '';
+
+        }
+
+    }
+
+}).mount('#app');
+
+</script>
+
 </body>
 </html>
