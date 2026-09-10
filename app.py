@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
-from openai import OpenAI
+from ollama import Client
 
 app = Flask(__name__)
 
@@ -13,10 +13,11 @@ if app.debug:
         return response
 
 
-client = OpenAI(
-    base_url="http://localhost:11434/v1",
-    api_key="ollama",
-)
+# Ollama純正クライアント
+# ※ OpenAI互換API(/v1/chat/completions)経由だと
+#   think(思考モード)無効化が効かないケースがあるため、
+#   Ollamaネイティブのクライアントを使用する
+client = Client(host="http://localhost:11434")
 
 OLLAMA_MODEL = "qwen3.5:0.8b"
 
@@ -143,38 +144,35 @@ def send_api():
 {level_prompt}
 
 以下の形式で回答してください。
+このプロンプトの指示文や見出しの説明文（「〜してください」等）は
+出力に含めず、指示に従った結果のみを出力してください。
 
 【推敲後の文章】
-
-修正した文章をここに表示してください。
-
+（ここに修正した文章のみを記載）
 
 【主な修正点】
-
-修正した箇所を最大5個まで説明してください。
-
-例：
+（修正した箇所を最大5個まで、以下の形式で記載）
 
 1. 「修正前」
    → 「修正後」
 
 理由：
-なぜ修正したのか簡潔に説明してください。
-
+（なぜ修正したのか簡潔に記載）
 
 【文章評価】
 
-読みやすさ：100点満点
-簡潔さ：100点満点
-自然さ：100点満点
+読みやすさ：◯◯点／100点
+簡潔さ：◯◯点／100点
+自然さ：◯◯点／100点
 
-最後に文章全体について短いコメントをしてください。
+【総評】
+（文章全体についての短いコメントのみを記載）
 """
 
 
     try:
 
-        chat_completion = client.chat.completions.create(
+        chat_response = client.chat(
 
             model=OLLAMA_MODEL,
 
@@ -187,27 +185,49 @@ def send_api():
                     "role": "user",
                     "content": received_text
                 }
-            ]
+            ],
+
+            # 思考(reasoning)モードを無効化し、
+            # 最終回答のみを直接生成させる
+            think=False,
+
+            options={
+                # コンテキスト長を拡大し、
+                # 長い出力の途中で打ち切られないようにする
+                "num_ctx": 8192
+            }
         )
 
 
-        if (
-            chat_completion.choices
-            and chat_completion.choices[0].message
-        ):
+        app.logger.info(
+            f"Ollama raw response: {chat_response}"
+        )
 
-            processed_text = (
-                chat_completion
-                .choices[0]
-                .message
-                .content
-            )
 
-        else:
+        message = chat_response.get("message", {})
 
-            processed_text = (
-                "AIから有効な応答がありませんでした。"
-            )
+        processed_text = (message.get("content") or "").strip()
+
+
+        if not processed_text:
+
+            # thinkを無効化してもcontentが空の場合に備え、
+            # thinkingフィールドに内容が入っていないか確認する
+            thinking_fallback = message.get("thinking")
+
+            if thinking_fallback:
+
+                processed_text = (
+                    "※本来の推敲結果が取得できなかったため、"
+                    "AIの思考過程をそのまま表示しています。\n\n"
+                    + thinking_fallback
+                )
+
+            else:
+
+                processed_text = (
+                    "AIから有効な応答がありませんでした。"
+                )
 
 
         return jsonify({
