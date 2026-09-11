@@ -2,7 +2,9 @@ from flask import Flask, request, jsonify, send_from_directory
 from ollama import Client
 import json
 
+
 app = Flask(__name__)
+
 
 # ========================================
 # Ollama設定
@@ -50,36 +52,46 @@ def index():
 PURPOSE_PROMPTS = {
 
     "report": """
-大学レポートとして適切な文章にする。
-・口語的な表現を、自然な文章表現に修正する
-・文体を統一する
-・簡潔で読みやすくする
+大学レポートに適した文章へ推敲する。
+
+・口語的な表現を自然な文章表現へ修正する
+・文体をできるだけ統一する
+・簡潔で読みやすい文章にする
 ・過度に難しい表現や専門的すぎる表現は使わない
-・「ちゃんと」「かなり」「いろんな」「マスターする」
-  などの口語表現は、文脈に合った自然な表現へ修正する
-・「実験」「研究」「調査」など、内容を表す重要な語は
+・「ちゃんと」「かなり」「いろんな」「でも」などの
+  口語表現は、文脈に合った自然な表現へ修正する
+・「実験」「研究」「調査」など内容を表す重要な語は
   原文の意味を維持し、理由なく変更しない
-・筆者の感想や推測を、客観的事実として書き換えない
+・筆者の感想や推測を客観的事実として書き換えない
 """,
 
     "email": """
-メールとして自然な文章にする。
-相手に失礼のない表現にする。
-硬すぎる表現を避け、簡潔で読みやすくする。
+メールとして自然で適切な文章へ推敲する。
+
+・相手に失礼のない表現にする
+・必要に応じて丁寧な表現へ修正する
+・硬すぎる表現は避ける
+・簡潔で読みやすい文章にする
+・原文にない事情や情報を追加しない
 """,
 
     "es": """
-就職活動のESとして適切な文章にする。
-簡潔で具体的な表現にする。
-同じ表現の繰り返しを減らす。
-経験や実績を勝手に追加しない。
-誇張しない。
+就職活動のESとして適切な文章へ推敲する。
+
+・簡潔で具体的な表現にする
+・同じ表現の繰り返しを減らす
+・読み手に伝わりやすい文章にする
+・経験や実績を勝手に追加しない
+・内容を誇張しない
 """,
 
     "normal": """
-自然で読みやすい日本語にする。
-誤字脱字や不自然な表現を修正する。
-冗長な表現を簡潔にする。
+自然で読みやすい日本語へ推敲する。
+
+・誤字脱字を修正する
+・不自然な表現を修正する
+・冗長な表現を簡潔にする
+・原文の意味や内容を維持する
 """
 }
 
@@ -92,21 +104,43 @@ LEVEL_PROMPTS = {
 
     "light": """
 修正は最小限にする。
-誤字脱字や明らかに不自然な表現だけを修正する。
-原文をできるだけ残す。
+
+・誤字脱字を修正する
+・明らかに不自然な表現のみ修正する
+・原文の表現をできるだけ残す
 """,
 
     "normal": """
 原文を活かしながら、
 自然で分かりやすい文章に修正する。
+
+不自然な表現や用途に合わない表現は、
+意味を変えない範囲で積極的に改善する。
 """,
 
     "strong": """
 文章全体を積極的に改善する。
-必要であれば構成や語順も変更する。
-ただし意味や事実は変更しない。
+
+必要であれば文章構成や語順も変更する。
+
+ただし、
+原文の意味・事実・主張は変更しない。
 """
 }
+
+
+# ========================================
+# 修正点比較用
+# ========================================
+
+def normalize_for_match(text):
+    """
+    AIが「生成AI」と「生成 AI」のように
+    空白を入れる場合があるため、
+    比較するときだけ空白・改行・タブを除去する。
+    """
+
+    return "".join(str(text).split())
 
 
 # ========================================
@@ -124,7 +158,7 @@ def format_result(result, original_text):
     ).strip()
 
     if not revised_text:
-        revised_text = "推敲結果を取得できませんでした."
+        revised_text = "推敲結果を取得できませんでした。"
 
 
     # -----------------------------
@@ -138,10 +172,21 @@ def format_result(result, original_text):
 
     valid_changes = []
 
+    # 比較用
+    normalized_original = normalize_for_match(
+        original_text
+    )
+
+    normalized_revised = normalize_for_match(
+        revised_text
+    )
+
+
     for change in changes:
 
         if not isinstance(change, dict):
             continue
+
 
         before = str(
             change.get("before", "")
@@ -155,34 +200,83 @@ def format_result(result, original_text):
             change.get("reason", "")
         ).strip()
 
+
+        # -----------------------------
         # 空データを除外
+        # -----------------------------
+
         if not before or not after:
             continue
 
-        # 修正前の文章が原文に存在するか確認
-        if before not in original_text:
+
+        # 比較用に空白を除去
+        normalized_before = normalize_for_match(
+            before
+        )
+
+        normalized_after = normalize_for_match(
+            after
+        )
+
+
+        # -----------------------------
+        # beforeとafterが同じなら除外
+        # -----------------------------
+
+        if normalized_before == normalized_after:
             continue
 
-        # 修正後の文章が推敲結果に存在するか確認
-        if after not in revised_text:
+
+        # -----------------------------
+        # beforeが原文に存在するか
+        # -----------------------------
+
+        if normalized_before not in normalized_original:
             continue
+
+
+        # -----------------------------
+        # afterが推敲後文章に存在するか
+        # -----------------------------
+
+        if normalized_after not in normalized_revised:
+            continue
+
+
+        # -----------------------------
+        # 理由が空なら補完
+        # -----------------------------
+
+        if not reason:
+
+            reason = (
+                "文章をより自然で読みやすい"
+                "表現に修正しました。"
+            )
+
 
         valid_changes.append({
+
             "before": before,
+
             "after": after,
+
             "reason": reason
+
         })
+
 
         # 最大5件
         if len(valid_changes) >= 5:
             break
 
+
     changes = valid_changes
 
 
-    # -----------------------------
-    # 評価
-    # -----------------------------
+    # ========================================
+    # 文章評価
+    # ========================================
 
     scores = result.get("scores", {})
 
@@ -193,12 +287,17 @@ def format_result(result, original_text):
     def normalize_score(value):
 
         try:
+
             score = int(value)
 
-            # 0～100に制限
-            return max(0, min(100, score))
+            # 0～100点に制限
+            return max(
+                0,
+                min(100, score)
+            )
 
         except (TypeError, ValueError):
+
             return 0
 
 
@@ -215,38 +314,65 @@ def format_result(result, original_text):
     )
 
 
-    # -----------------------------
+    # ========================================
     # 総評
-    # -----------------------------
+    # ========================================
 
     summary = str(
         result.get("summary", "")
     ).strip()
 
     if not summary:
-        summary = "総評を取得できませんでした。"
+
+        summary = (
+            "総評を取得できませんでした。"
+        )
 
 
-    # -----------------------------
-    # 表示用テキスト作成
-    # -----------------------------
+    # ========================================
+    # 表示用テキスト
+    # ========================================
 
     lines = []
 
-    lines.append("【推敲後の文章】")
-    lines.append(revised_text)
+
+    # -----------------------------
+    # 推敲後文章
+    # -----------------------------
+
+    lines.append(
+        "【推敲後の文章】"
+    )
+
+    lines.append(
+        revised_text
+    )
 
     lines.append("")
-    lines.append("【主な修正点】")
+
+
+    # -----------------------------
+    # 主な修正点
+    # -----------------------------
+
+    lines.append(
+        "【主な修正点】"
+    )
 
 
     if changes:
 
-        for i, change in enumerate(changes, start=1):
+        for i, change in enumerate(
+            changes,
+            start=1
+        ):
 
             before = change["before"]
+
             after = change["after"]
+
             reason = change["reason"]
+
 
             lines.append(
                 f'{i}. 「{before}」'
@@ -262,75 +388,115 @@ def format_result(result, original_text):
 
             lines.append("")
 
+
     else:
 
-        lines.append(
-            "大きな修正はありません。"
-        )
+        # 原文と推敲後が違うのに
+        # changesだけ取得できなかった場合
+        if (
+            normalized_original
+            != normalized_revised
+        ):
+
+            lines.append(
+                "文章全体の表現を調整しました。"
+            )
+
+        else:
+
+            lines.append(
+                "大きな修正はありません。"
+            )
 
 
-    lines.append("【文章評価】")
+    # -----------------------------
+    # 文章評価
+    # -----------------------------
 
     lines.append(
-        f"読みやすさ：{readability}点／100点"
+        "【文章評価】"
     )
 
     lines.append(
-        f"簡潔さ：{conciseness}点／100点"
+        f"読みやすさ："
+        f"{readability}点／100点"
     )
 
     lines.append(
-        f"自然さ：{naturalness}点／100点"
+        f"簡潔さ："
+        f"{conciseness}点／100点"
+    )
+
+    lines.append(
+        f"自然さ："
+        f"{naturalness}点／100点"
     )
 
     lines.append("")
 
-    lines.append("【総評】")
-    lines.append(summary)
+
+    # -----------------------------
+    # 総評
+    # -----------------------------
+
+    lines.append(
+        "【総評】"
+    )
+
+    lines.append(
+        summary
+    )
 
 
     return "\n".join(lines)
+
 
 # ========================================
 # 推敲API
 # ========================================
 
-@app.route("/send_api", methods=["POST"])
+@app.route(
+    "/send_api",
+    methods=["POST"]
+)
 def send_api():
 
-    data = request.get_json(silent=True)
-
-
     # -----------------------------
-    # 入力チェック
+    # JSON取得
     # -----------------------------
 
-    if not data or "text" not in data:
+    data = request.get_json(
+        silent=True
+    )
+
+
+    if not data:
 
         return jsonify({
-            "error": "文章が送信されていません。"
+            "error":
+            "JSONデータを取得できませんでした。"
         }), 400
 
 
-    if not isinstance(data["text"], str):
+    # -----------------------------
+    # 入力文章
+    # -----------------------------
 
-        return jsonify({
-            "error": "文章の形式が正しくありません。"
-        }), 400
-
-
-    received_text = data["text"].strip()
+    received_text = str(
+        data.get("text", "")
+    ).strip()
 
 
     if not received_text:
 
         return jsonify({
-            "error": "文章を入力してください。"
+            "error":
+            "文章を入力してください。"
         }), 400
 
 
     # -----------------------------
-    # purpose / level
+    # 用途
     # -----------------------------
 
     purpose = data.get(
@@ -338,22 +504,34 @@ def send_api():
         "normal"
     )
 
+
+    if purpose not in PURPOSE_PROMPTS:
+
+        purpose = "normal"
+
+
+    # -----------------------------
+    # 推敲レベル
+    # -----------------------------
+
     level = data.get(
         "level",
         "normal"
     )
 
 
-    if purpose not in PURPOSE_PROMPTS:
-        purpose = "normal"
-
     if level not in LEVEL_PROMPTS:
+
         level = "normal"
 
 
-    purpose_prompt = PURPOSE_PROMPTS[purpose]
+    purpose_prompt = (
+        PURPOSE_PROMPTS[purpose]
+    )
 
-    level_prompt = LEVEL_PROMPTS[level]
+    level_prompt = (
+        LEVEL_PROMPTS[level]
+    )
 
 
     # ========================================
@@ -361,60 +539,209 @@ def send_api():
     # ========================================
 
     system_prompt = f"""
-あなたは日本語文章の推敲アシスタントです。
+あなたは日本語文章の校正・推敲を行います。
 
-次の条件に従ってユーザーの文章を推敲してください。
-
-用途：
+【用途】
 {purpose_prompt}
 
-推敲レベル：
+【推敲レベル】
 {level_prompt}
 
 原文の意味や事実を維持しながら、
 用途に適した自然で読みやすい文章に改善してください。
 
+
 【必ず行うこと】
+
 ・不自然な表現を自然な日本語に修正する
+
 ・用途に合わない口語表現を修正する
+
 ・冗長な表現を必要に応じて簡潔にする
+
 ・選択された推敲レベルに応じて文章を改善する
 
+
+【重要】
+
+文章に改善できる箇所が存在する場合は、
+原文をそのまま返さず、
+実際に文章を改善してください。
+
+
 【禁止事項】
+
 ・原文にない事実を追加しない
+
 ・原文の意味や主張を変更しない
+
+・筆者の感想を事実として変更しない
+
 ・頻度や程度を勝手に変更しない
-・「実験」「研究」「調査」などの重要な語を理由なく変更しない
+
+・因果関係を勝手に追加しない
+
+・「実験」「研究」「調査」などの
+  重要な語を理由なく変更しない
+
 ・不自然に難しい言葉へ置き換えない
 
+
 【修正点】
-・実際に変更した箇所だけを記録する
-・beforeとafterが同じ修正は記録しない
-・beforeは原文に実際に存在する表現にする
-・afterは推敲後の文章に実際に存在する表現にする
-・reasonはその変更だけについて簡潔に説明する
-・最大5件
+
+changesには、
+実際に変更した箇所だけを記録してください。
+
+beforeは、
+原文に実際に存在する文字列を
+そのまま使用してください。
+
+afterは、
+推敲後の文章に実際に存在する文字列を
+そのまま使用してください。
+
+beforeとafterを
+同じ文章にしてはいけません。
+
+修正理由は、
+その変更だけについて
+簡潔に説明してください。
+
+主な修正点は最大5件です。
+
 
 【文章評価】
-推敲後の文章を0～100の整数で評価する。
-読みやすさ、簡潔さ、自然さをそれぞれ評価する。
-安易に100点にせず、改善の余地も考慮する。
+
+推敲後の文章を
+0～100の整数で評価してください。
+
+・読みやすさ
+・簡潔さ
+・自然さ
+
+をそれぞれ評価してください。
+
+安易に100点にせず、
+改善の余地も考慮してください。
+
 
 【総評】
-推敲後の文章について1～2文で簡潔に評価する。
-実際に行っていない修正について説明しない。
 
-前置きや挨拶は出力しない。
+推敲後の文章について
+1～2文で簡潔に評価してください。
+
+実際に行っていない修正について
+説明してはいけません。
+
+
+前置きや挨拶は不要です。
 """
 
 
+    # ========================================
+    # JSON Schema
+    # ========================================
+
+    output_schema = {
+
+        "type": "object",
+
+        "properties": {
+
+            "revised_text": {
+                "type": "string"
+            },
+
+            "changes": {
+
+                "type": "array",
+
+                "items": {
+
+                    "type": "object",
+
+                    "properties": {
+
+                        "before": {
+                            "type": "string"
+                        },
+
+                        "after": {
+                            "type": "string"
+                        },
+
+                        "reason": {
+                            "type": "string"
+                        }
+
+                    },
+
+                    "required": [
+                        "before",
+                        "after",
+                        "reason"
+                    ]
+
+                }
+
+            },
+
+            "scores": {
+
+                "type": "object",
+
+                "properties": {
+
+                    "readability": {
+                        "type": "integer"
+                    },
+
+                    "conciseness": {
+                        "type": "integer"
+                    },
+
+                    "naturalness": {
+                        "type": "integer"
+                    }
+
+                },
+
+                "required": [
+                    "readability",
+                    "conciseness",
+                    "naturalness"
+                ]
+
+            },
+
+            "summary": {
+                "type": "string"
+            }
+
+        },
+
+        "required": [
+
+            "revised_text",
+
+            "changes",
+
+            "scores",
+
+            "summary"
+
+        ]
+
+    }
+
+
+    # ========================================
+    # Ollamaへ送信
+    # ========================================
+
     try:
 
-        # ========================================
-        # Ollamaへ送信
-        # ========================================
-
-        chat_response = client.chat(
+        response = client.chat(
 
             model=OLLAMA_MODEL,
 
@@ -432,201 +759,130 @@ def send_api():
 
             ],
 
+            format=output_schema,
+
             think=False,
-
-            # JSON出力を要求
-            format={
-                "type": "object",
-
-                "properties": {
-
-                    "revised_text": {
-                        "type": "string"
-                    },
-
-                    "changes": {
-
-                        "type": "array",
-
-                        "maxItems": 5,
-
-                        "items": {
-
-                            "type": "object",
-
-                            "properties": {
-
-                                "before": {
-                                    "type": "string"
-                                },
-
-                                "after": {
-                                    "type": "string"
-                                },
-
-                                "reason": {
-                                    "type": "string"
-                                }
-
-                            },
-
-                            "required": [
-                                "before",
-                                "after",
-                                "reason"
-                            ]
-
-                        }
-
-                    },
-
-                    "scores": {
-
-                        "type": "object",
-
-                        "properties": {
-
-                            "readability": {
-                                "type": "integer",
-                                "minimum": 0,
-                                "maximum": 100
-                            },
-
-                            "conciseness": {
-                                "type": "integer",
-                                "minimum": 0,
-                                "maximum": 100
-                            },
-
-                            "naturalness": {
-                                "type": "integer",
-                                "minimum": 0,
-                                "maximum": 100
-                            }
-
-                        },
-
-                        "required": [
-                            "readability",
-                            "conciseness",
-                            "naturalness"
-                        ]
-
-                    },
-
-                    "summary": {
-                        "type": "string"
-                    }
-
-                },
-
-                "required": [
-                    "revised_text",
-                    "changes",
-                    "scores",
-                    "summary"
-                ]
-            },
 
             options={
 
                 "num_ctx": 8192,
 
-                # 推敲なのでランダム性を低めにする
                 "temperature": 0.1
 
             }
+
         )
 
 
-        # ========================================
-        # Ollamaレスポンス取得
-        # ========================================
+    except Exception as e:
 
-        message = chat_response.get(
-            "message",
-            {}
-        )
-
-        content = (
-            message.get("content") or ""
-        ).strip()
-
-
-        app.logger.info(
-            f"Ollama JSON response: {content}"
-        )
-
-
-        if not content:
-
-            return jsonify({
-                "error":
-                "AIから有効な応答を取得できませんでした。"
-            }), 502
-
-
-        # ========================================
-        # JSON解析
-        # ========================================
-
-        try:
-
-            result = json.loads(content)
-
-        except json.JSONDecodeError:
-
-            app.logger.error(
-                f"Invalid JSON from Ollama: {content}"
-            )
-
-            return jsonify({
-                "error":
-                "AIの応答形式が正しくありませんでした。"
-            }), 502
-
-
-        # ========================================
-        # Python側で表示形式を作る
-        # ========================================
-
-        processed_text = format_result(
-            result,
-             received_text
-        )
-
-
-        return jsonify({
-
-            "message":
-                "文章を推敲しました。",
-
-            "processed_text":
-                processed_text
-
-        })
-
-
-    except Exception:
-
-        app.logger.exception(
-            "Ollama API call failed."
+        print(
+            "Ollama error:",
+            e
         )
 
         return jsonify({
+
             "error":
-            "AIサービスとの通信中にエラーが発生しました。"
+            "AIとの通信に失敗しました。"
+            "Ollamaが起動しているか確認してください。"
+
         }), 500
 
 
+    # ========================================
+    # AI回答取得
+    # ========================================
+
+    try:
+
+        content = response["message"]["content"]
+
+    except Exception:
+
+        return jsonify({
+
+            "error":
+            "AIから正常な回答を取得できませんでした。"
+
+        }), 502
+
+
+    if not content:
+
+        return jsonify({
+
+            "error":
+            "AIから空の回答が返されました。"
+
+        }), 502
+
+
+    # ========================================
+    # JSON解析
+    # ========================================
+
+    try:
+
+        result = json.loads(
+            content
+        )
+
+    except json.JSONDecodeError:
+
+        print(
+            "Invalid JSON:",
+            content
+        )
+
+        return jsonify({
+
+            "error":
+            "AIの回答形式が正しくありませんでした。"
+
+        }), 502
+
+
+    if not isinstance(result, dict):
+
+        return jsonify({
+
+            "error":
+            "AIの回答形式が正しくありませんでした。"
+
+        }), 502
+
+
+    # ========================================
+    # 表示形式に変換
+    # ========================================
+
+    processed_text = format_result(
+        result,
+        received_text
+    )
+
+
+    # ========================================
+    # フロントへ返す
+    # ========================================
+
+    return jsonify({
+
+        "processed_text":
+        processed_text
+
+    })
+
+
 # ========================================
-# 起動
+# Flask起動
 # ========================================
 
 if __name__ == "__main__":
 
     app.run(
-        debug=True,
         host="0.0.0.0",
-        port=5000
+        port=5000,
+        debug=True
     )
